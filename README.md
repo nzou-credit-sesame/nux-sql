@@ -6,4 +6,3 @@
 ## Team KPI dashboard
 [Looker](https://creditsesame.looker.com/dashboards/200)
 
-Note: the underline data of the dashboard is coming from kpi-refreshing-data.sql
