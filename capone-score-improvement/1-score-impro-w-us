@@ -1,0 +1,151 @@
+with clicks as
+(
+	select
+		cap.usertoken
+		,cap.clickid
+		, date(coalesce(cap.createdate, rev.timeclicked))  as clickdate
+		, crt.creditinfoid
+		, paystatushistory
+		, currentbalance
+		, creditlimit
+		,(cast(currentbalance as decimal(18,5))/creditlimit) as cu
+		, case when cap.card_name ilike 'Cap%One%Platinum%' then 'Capital One Platinum Credit Card'
+		when (cap.card_name ilike '%quicksilver%' and cap.card_name ilike '%one%one%') then 'Capital One QuicksilverOne Cash Rewards Credit Card'
+		else null
+		end as cardname
+		,state 
+
+	from public.click_applies_properties cap
+	inner join revenue.all_partners_revenue_data rev
+	using (clickid)
+	inner join public.user
+	using (usertoken)
+	inner join
+	(
+		select
+		*
+		from credit_report_tradelines
+		where 1
+		and accounttype ilike 'credit%'
+		and (creditor ilike '%cap%1' or creditor ilike 'cap%one%')
+		and creditor not ilike 'CAPSTONE%'
+		and openclosed ilike 'open'
+	) crt
+	on cap.usertoken = crt.usertoken
+	and crt.dateopened = date(coalesce(cap.createdate, rev.timeclicked))
+
+	where 1
+	and date(cap.createdate) >= current_date - 365
+	and cap.vertical ilike 'CREDIT%CARDs'
+	and cap.partner ilike 'cap%one'
+	and verticalname ilike 'Credit%Cards'
+
+	and (
+	cap.card_name ilike 'Cap%One%Platinum%'
+	or (cap.card_name ilike '%quicksilver%' and cap.card_name ilike '%one%one%')
+	)
+	and amountreported > 0
+	and (datereported - dateopened)<=62
+),
+
+first_cs as
+(
+	select x.*
+	from
+	(
+		select
+			crt.usertoken
+			, crt.clickid
+			, cph.creditinfodate as initial_date
+			, cph.vantage3 as initial_cs
+			, state
+			, row_number() over(PARTITION BY crt.usertoken order by cph.creditinfodate desc) as rn
+		from clicks crt
+		inner Join public.credit_profile_history cph
+		ON cph.usertoken=crt.usertoken
+		and date(cph.creditinfodate) <= clickdate
+		and date(cph.creditinfodate) >= clickdate-10
+	) x
+	where rn = 1
+),
+
+second_cs as
+(
+	select x.*
+	from
+	(
+		select
+			crt.*
+			, cph.creditinfodate as new_date
+			, cph.vantage3 as new_cs
+			, row_number() over(PARTITION BY crt.usertoken order by cph.creditinfodate asc) as rn
+		from clicks crt
+		inner Join public.credit_profile_history cph
+		ON cph.usertoken=crt.usertoken
+		and cph.creditinfoid = crt.creditinfoid
+		and date(cph.creditinfodate) <= clickdate + 60
+		and date(cph.creditinfodate) >= clickdate + 30
+		) x
+	where rn = 1
+),
+
+profile as (
+	select f.usertoken
+	, f.initial_date
+	, f.clickid
+	, s.clickdate
+	, f.initial_cs
+	, s.new_cs
+	, s.new_date
+	,state
+	, cu
+	, paystatushistory
+	, currentbalance
+	, creditlimit
+	from first_cs f
+	inner join second_cs s
+	using(clickid)
+)
+
+select
+clickid
+, (new_cs - initial_cs) as score_change
+, case when paystatushistory is null then 0
+else 1
+end as payment
+,cu
+from profile
+where 1
+and new_date > initial_date
+and cu <= 0.1
+
+
+
+
+select creditlimit
+, cardname
+,count(distinct clickid)
+from clicks
+group by 1,2
+order by 3 desc
+limit 100
+
+
+
+select
+case when paystatushistory is null then 0
+else 1
+end as payment
+,median(cu)
+from profile
+where 1
+and new_date > initial_date
+group by 1
+
+
+
+
+
+
+
+
